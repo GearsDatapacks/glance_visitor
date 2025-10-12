@@ -123,6 +123,51 @@ pub type Visitor(a) {
     tuple: fn(Visitor(a), glance.Span, List(glance.Expression), a) -> a,
     tuple_index: fn(Visitor(a), glance.Span, glance.Expression, Int, a) -> a,
     variable: fn(Visitor(a), glance.Span, String, a) -> a,
+    pattern: fn(Visitor(a), glance.Pattern, a) -> a,
+    pattern_assignment: fn(Visitor(a), glance.Span, glance.Pattern, String, a) ->
+      a,
+    pattern_bit_string: fn(
+      Visitor(a),
+      glance.Span,
+      List(
+        #(glance.Pattern, List(glance.BitStringSegmentOption(glance.Pattern))),
+      ),
+      a,
+    ) ->
+      a,
+    pattern_concatenate: fn(
+      Visitor(a),
+      glance.Span,
+      String,
+      Option(glance.AssignmentName),
+      glance.AssignmentName,
+      a,
+    ) ->
+      a,
+    pattern_discard: fn(Visitor(a), glance.Span, String, a) -> a,
+    pattern_float: fn(Visitor(a), glance.Span, String, a) -> a,
+    pattern_int: fn(Visitor(a), glance.Span, String, a) -> a,
+    pattern_list: fn(
+      Visitor(a),
+      glance.Span,
+      List(glance.Pattern),
+      Option(glance.Pattern),
+      a,
+    ) ->
+      a,
+    pattern_string: fn(Visitor(a), glance.Span, String, a) -> a,
+    pattern_tuple: fn(Visitor(a), glance.Span, List(glance.Pattern), a) -> a,
+    pattern_variable: fn(Visitor(a), glance.Span, String, a) -> a,
+    pattern_variant: fn(
+      Visitor(a),
+      glance.Span,
+      Option(String),
+      String,
+      List(glance.Field(glance.Pattern)),
+      Bool,
+      a,
+    ) ->
+      a,
   )
 }
 
@@ -155,6 +200,18 @@ pub const default = Visitor(
   tuple:,
   tuple_index:,
   variable:,
+  pattern:,
+  pattern_assignment:,
+  pattern_bit_string:,
+  pattern_concatenate:,
+  pattern_discard:,
+  pattern_float:,
+  pattern_int:,
+  pattern_list:,
+  pattern_string:,
+  pattern_tuple:,
+  pattern_variable:,
+  pattern_variant:,
 )
 
 pub fn module(visitor: Visitor(a), module: glance.Module, initial: a) -> a {
@@ -226,21 +283,27 @@ pub fn assignment(
   visitor: Visitor(a),
   _location: glance.Span,
   _kind: glance.AssignmentKind,
-  _pattern: glance.Pattern,
+  pattern: glance.Pattern,
   _annotation: Option(glance.Type),
   value: glance.Expression,
   acc: a,
 ) -> a {
+  let acc = visitor.pattern(visitor, pattern, acc)
   visitor.expression(visitor, value, acc)
 }
 
 pub fn use_(
   visitor: Visitor(a),
   _location: glance.Span,
-  _patterns: List(glance.UsePattern),
+  patterns: List(glance.UsePattern),
   function: glance.Expression,
   acc: a,
 ) -> a {
+  let acc =
+    list.fold(patterns, acc, fn(acc, pattern) {
+      visitor.pattern(visitor, pattern.pattern, acc)
+    })
+
   visitor.expression(visitor, function, acc)
 }
 
@@ -402,17 +465,20 @@ pub fn call(
   acc: a,
 ) -> a {
   let acc = visitor.expression(visitor, function, acc)
-  list.fold(arguments, acc, fn(acc, arg) { field(visitor, arg, acc) })
+  list.fold(arguments, acc, fn(acc, arg) {
+    field(visitor, arg, visitor.expression, acc)
+  })
 }
 
 fn field(
   visitor: Visitor(a),
-  field: glance.Field(glance.Expression),
+  field: glance.Field(node),
+  f: fn(Visitor(a), node, a) -> a,
   acc: a,
 ) -> a {
   case field {
     glance.LabelledField(item:, ..) | glance.UnlabelledField(item:) ->
-      visitor.expression(visitor, item, acc)
+      f(visitor, item, acc)
     glance.ShorthandField(..) -> acc
   }
 }
@@ -432,6 +498,13 @@ pub fn case_(
 }
 
 fn clause(visitor: Visitor(a), clause: glance.Clause, acc: a) -> a {
+  let acc =
+    list.fold(clause.patterns, acc, fn(acc, patterns) {
+      list.fold(patterns, acc, fn(acc, pattern) {
+        visitor.pattern(visitor, pattern, acc)
+      })
+    })
+
   let acc = case clause.guard {
     None -> acc
     Some(guard) -> visitor.expression(visitor, guard, acc)
@@ -494,8 +567,12 @@ pub fn fn_capture(
 ) -> a {
   let acc = visitor.expression(visitor, function, acc)
   let acc =
-    list.fold(arguments_before, acc, fn(acc, arg) { field(visitor, arg, acc) })
-  list.fold(arguments_after, acc, fn(acc, arg) { field(visitor, arg, acc) })
+    list.fold(arguments_before, acc, fn(acc, arg) {
+      field(visitor, arg, visitor.expression, acc)
+    })
+  list.fold(arguments_after, acc, fn(acc, arg) {
+    field(visitor, arg, visitor.expression, acc)
+  })
 }
 
 pub fn int(
@@ -621,4 +698,194 @@ pub fn variable(
   acc: a,
 ) -> a {
   acc
+}
+
+pub fn pattern(visitor: Visitor(a), pattern: glance.Pattern, acc: a) -> a {
+  case pattern {
+    glance.PatternAssignment(location:, attern: pattern, name:) ->
+      visitor.pattern_assignment(visitor, location, pattern, name, acc)
+    glance.PatternBitString(location:, segments:) ->
+      visitor.pattern_bit_string(visitor, location, segments, acc)
+    glance.PatternConcatenate(location:, prefix:, prefix_name:, rest_name:) ->
+      visitor.pattern_concatenate(
+        visitor,
+        location,
+        prefix,
+        prefix_name,
+        rest_name,
+        acc,
+      )
+    glance.PatternDiscard(location:, name:) ->
+      visitor.pattern_discard(visitor, location, name, acc)
+    glance.PatternFloat(location:, value:) ->
+      visitor.pattern_float(visitor, location, value, acc)
+    glance.PatternInt(location:, value:) ->
+      visitor.pattern_int(visitor, location, value, acc)
+    glance.PatternList(location:, elements:, tail:) ->
+      visitor.pattern_list(visitor, location, elements, tail, acc)
+    glance.PatternString(location:, value:) ->
+      visitor.pattern_string(visitor, location, value, acc)
+    glance.PatternTuple(location:, elements:) ->
+      visitor.pattern_tuple(visitor, location, elements, acc)
+    glance.PatternVariable(location:, name:) ->
+      visitor.pattern_variable(visitor, location, name, acc)
+    glance.PatternVariant(
+      location:,
+      module:,
+      constructor:,
+      arguments:,
+      with_spread:,
+    ) ->
+      visitor.pattern_variant(
+        visitor,
+        location,
+        module,
+        constructor,
+        arguments,
+        with_spread,
+        acc,
+      )
+  }
+}
+
+pub fn pattern_assignment(
+  visitor: Visitor(a),
+  _location: glance.Span,
+  pattern: glance.Pattern,
+  _name: String,
+  acc: a,
+) -> a {
+  visitor.pattern(visitor, pattern, acc)
+}
+
+pub fn pattern_bit_string(
+  visitor: Visitor(a),
+  _location: glance.Span,
+  segments: List(
+    #(glance.Pattern, List(glance.BitStringSegmentOption(glance.Pattern))),
+  ),
+  acc: a,
+) -> a {
+  use acc, #(pattern, options) <- list.fold(segments, acc)
+  let acc = visitor.pattern(visitor, pattern, acc)
+  use acc, option <- list.fold(options, acc)
+  case option {
+    glance.BigOption
+    | glance.BitsOption
+    | glance.BytesOption
+    | glance.FloatOption
+    | glance.IntOption
+    | glance.LittleOption
+    | glance.NativeOption
+    | glance.SignedOption
+    | glance.SizeOption(_)
+    | glance.UnitOption(_)
+    | glance.UnsignedOption
+    | glance.Utf16CodepointOption
+    | glance.Utf16Option
+    | glance.Utf32CodepointOption
+    | glance.Utf32Option
+    | glance.Utf8CodepointOption
+    | glance.Utf8Option -> acc
+    glance.SizeValueOption(pattern) -> visitor.pattern(visitor, pattern, acc)
+  }
+}
+
+pub fn pattern_concatenate(
+  _visitor: Visitor(a),
+  _location: glance.Span,
+  _prefix: String,
+  _prefix_name: Option(glance.AssignmentName),
+  _rest_name: glance.AssignmentName,
+  acc: a,
+) -> a {
+  acc
+}
+
+pub fn pattern_discard(
+  _visitor: Visitor(a),
+  _location: glance.Span,
+  _name: String,
+  acc: a,
+) -> a {
+  acc
+}
+
+pub fn pattern_float(
+  _visitor: Visitor(a),
+  _location: glance.Span,
+  _value: String,
+  acc: a,
+) -> a {
+  acc
+}
+
+pub fn pattern_int(
+  _visitor: Visitor(a),
+  _location: glance.Span,
+  _value: String,
+  acc: a,
+) -> a {
+  acc
+}
+
+pub fn pattern_list(
+  visitor: Visitor(a),
+  _location: glance.Span,
+  elements: List(glance.Pattern),
+  tail: Option(glance.Pattern),
+  acc: a,
+) -> a {
+  let acc =
+    list.fold(elements, acc, fn(acc, element) {
+      visitor.pattern(visitor, element, acc)
+    })
+
+  case tail {
+    None -> acc
+    Some(tail) -> visitor.pattern(visitor, tail, acc)
+  }
+}
+
+pub fn pattern_string(
+  _visitor: Visitor(a),
+  _location: glance.Span,
+  _value: String,
+  acc: a,
+) -> a {
+  acc
+}
+
+pub fn pattern_tuple(
+  visitor: Visitor(a),
+  _location: glance.Span,
+  elements: List(glance.Pattern),
+  acc: a,
+) -> a {
+  list.fold(elements, acc, fn(acc, element) {
+    visitor.pattern(visitor, element, acc)
+  })
+}
+
+pub fn pattern_variable(
+  _visitor: Visitor(a),
+  _location: glance.Span,
+  _name: String,
+  acc: a,
+) -> a {
+  acc
+}
+
+pub fn pattern_variant(
+  visitor: Visitor(a),
+  _location: glance.Span,
+  _module: Option(String),
+  _constructor: String,
+  arguments: List(glance.Field(glance.Pattern)),
+  _with_spread: Bool,
+  acc: a,
+) -> a {
+  list.fold(arguments, acc, fn(acc, argument) {
+    field(visitor, argument, visitor.pattern, acc)
+  })
 }
