@@ -8,6 +8,9 @@ pub type Visitor(a) {
   Visitor(
     function: fn(Visitor(a), glance.Definition(glance.Function), a) -> a,
     constant: fn(Visitor(a), glance.Definition(glance.Constant), a) -> a,
+    custom_type: fn(Visitor(a), glance.Definition(glance.CustomType), a) -> a,
+    type_alias: fn(Visitor(a), glance.Definition(glance.TypeAlias), a) -> a,
+    variant: fn(Visitor(a), glance.Variant, a) -> a,
     statement: fn(Visitor(a), glance.Statement, a) -> a,
     expression: fn(Visitor(a), glance.Expression, a) -> a,
     assert_: fn(
@@ -168,12 +171,36 @@ pub type Visitor(a) {
       a,
     ) ->
       a,
+    type_: fn(Visitor(a), glance.Type, a) -> a,
+    function_type: fn(
+      Visitor(a),
+      glance.Span,
+      List(glance.Type),
+      glance.Type,
+      a,
+    ) ->
+      a,
+    hole_type: fn(Visitor(a), glance.Span, String, a) -> a,
+    named_type: fn(
+      Visitor(a),
+      glance.Span,
+      String,
+      Option(String),
+      List(glance.Type),
+      a,
+    ) ->
+      a,
+    tuple_type: fn(Visitor(a), glance.Span, List(glance.Type), a) -> a,
+    variable_type: fn(Visitor(a), glance.Span, String, a) -> a,
   )
 }
 
 pub const default = Visitor(
   function:,
   constant:,
+  custom_type:,
+  type_alias:,
+  variant:,
   statement:,
   expression:,
   assert_:,
@@ -212,13 +239,19 @@ pub const default = Visitor(
   pattern_tuple:,
   pattern_variable:,
   pattern_variant:,
+  type_:,
+  function_type:,
+  hole_type:,
+  named_type:,
+  tuple_type:,
+  variable_type:,
 )
 
 pub fn module(visitor: Visitor(a), module: glance.Module, initial: a) -> a {
   let glance.Module(
     imports: _,
-    custom_types: _,
-    type_aliases: _,
+    custom_types:,
+    type_aliases:,
     constants:,
     functions:,
   ) = module
@@ -234,6 +267,18 @@ pub fn module(visitor: Visitor(a), module: glance.Module, initial: a) -> a {
       #(
         fn(acc) { visitor.function(visitor, function, acc) },
         function.definition.location,
+      )
+    }),
+    list.map(custom_types, fn(type_) {
+      #(
+        fn(acc) { visitor.custom_type(visitor, type_, acc) },
+        type_.definition.location,
+      )
+    }),
+    list.map(type_aliases, fn(alias) {
+      #(
+        fn(acc) { visitor.type_alias(visitor, alias, acc) },
+        alias.definition.location,
       )
     }),
   ]
@@ -254,8 +299,85 @@ pub fn function(
   function: glance.Definition(glance.Function),
   acc: a,
 ) -> a {
-  list.fold(function.definition.body, acc, fn(acc, stmt) {
-    visitor.statement(visitor, stmt, acc)
+  let glance.Function(
+    location: _,
+    name: _,
+    publicity: _,
+    parameters:,
+    return:,
+    body:,
+  ) = function.definition
+
+  let acc =
+    list.fold(parameters, acc, fn(acc, parameter) {
+      case parameter.type_ {
+        None -> acc
+        Some(annotation) -> visitor.type_(visitor, annotation, acc)
+      }
+    })
+
+  let acc = case return {
+    None -> acc
+    Some(annotation) -> visitor.type_(visitor, annotation, acc)
+  }
+
+  list.fold(body, acc, fn(acc, stmt) { visitor.statement(visitor, stmt, acc) })
+}
+
+pub fn constant(
+  visitor: Visitor(a),
+  constant: glance.Definition(glance.Constant),
+  acc: a,
+) -> a {
+  let glance.Constant(location: _, name: _, publicity: _, annotation:, value:) =
+    constant.definition
+
+  let acc = case annotation {
+    None -> acc
+    Some(annotation) -> visitor.type_(visitor, annotation, acc)
+  }
+
+  visitor.expression(visitor, value, acc)
+}
+
+pub fn custom_type(
+  visitor: Visitor(a),
+  type_: glance.Definition(glance.CustomType),
+  acc: a,
+) -> a {
+  let glance.CustomType(
+    location: _,
+    name: _,
+    publicity: _,
+    opaque_: _,
+    parameters: _,
+    variants:,
+  ) = type_.definition
+
+  list.fold(variants, acc, fn(acc, variant) {
+    visitor.variant(visitor, variant, acc)
+  })
+}
+
+pub fn type_alias(
+  visitor: Visitor(a),
+  alias: glance.Definition(glance.TypeAlias),
+  acc: a,
+) -> a {
+  let glance.TypeAlias(
+    location: _,
+    name: _,
+    publicity: _,
+    parameters: _,
+    aliased:,
+  ) = alias.definition
+
+  visitor.type_(visitor, aliased, acc)
+}
+
+pub fn variant(visitor: Visitor(a), variant: glance.Variant, acc: a) -> a {
+  list.fold(variant.fields, acc, fn(acc, field) {
+    visitor.type_(visitor, field.item, acc)
   })
 }
 
@@ -284,11 +406,17 @@ pub fn assignment(
   _location: glance.Span,
   _kind: glance.AssignmentKind,
   pattern: glance.Pattern,
-  _annotation: Option(glance.Type),
+  annotation: Option(glance.Type),
   value: glance.Expression,
   acc: a,
 ) -> a {
   let acc = visitor.pattern(visitor, pattern, acc)
+
+  let acc = case annotation {
+    None -> acc
+    Some(annotation) -> visitor.type_(visitor, annotation, acc)
+  }
+
   visitor.expression(visitor, value, acc)
 }
 
@@ -301,7 +429,11 @@ pub fn use_(
 ) -> a {
   let acc =
     list.fold(patterns, acc, fn(acc, pattern) {
-      visitor.pattern(visitor, pattern.pattern, acc)
+      let acc = visitor.pattern(visitor, pattern.pattern, acc)
+      case pattern.annotation {
+        None -> acc
+        Some(annotation) -> visitor.type_(visitor, annotation, acc)
+      }
     })
 
   visitor.expression(visitor, function, acc)
@@ -319,14 +451,6 @@ pub fn assert_(
     None -> acc
     Some(message) -> visitor.expression(visitor, message, acc)
   }
-}
-
-pub fn constant(
-  visitor: Visitor(a),
-  constant: glance.Definition(glance.Constant),
-  acc: a,
-) -> a {
-  visitor.expression(visitor, constant.definition.value, acc)
 }
 
 pub fn expression(
@@ -546,11 +670,24 @@ pub fn float(
 pub fn fn_(
   visitor: Visitor(a),
   _location: glance.Span,
-  _arguments: List(glance.FnParameter),
-  _return_annotation: Option(glance.Type),
+  arguments: List(glance.FnParameter),
+  return_annotation: Option(glance.Type),
   body: List(glance.Statement),
   acc: a,
 ) -> a {
+  let acc =
+    list.fold(arguments, acc, fn(acc, parameter) {
+      case parameter.type_ {
+        None -> acc
+        Some(annotation) -> visitor.type_(visitor, annotation, acc)
+      }
+    })
+
+  let acc = case return_annotation {
+    None -> acc
+    Some(annotation) -> visitor.type_(visitor, annotation, acc)
+  }
+
   list.fold(body, acc, fn(acc, statement) {
     visitor.statement(visitor, statement, acc)
   })
@@ -888,4 +1025,74 @@ pub fn pattern_variant(
   list.fold(arguments, acc, fn(acc, argument) {
     field(visitor, argument, visitor.pattern, acc)
   })
+}
+
+pub fn type_(visitor: Visitor(a), type_: glance.Type, acc: a) -> a {
+  case type_ {
+    glance.FunctionType(location:, parameters:, return:) ->
+      visitor.function_type(visitor, location, parameters, return, acc)
+    glance.HoleType(location:, name:) ->
+      visitor.hole_type(visitor, location, name, acc)
+    glance.NamedType(location:, name:, module:, parameters:) ->
+      visitor.named_type(visitor, location, name, module, parameters, acc)
+    glance.TupleType(location:, elements:) ->
+      visitor.tuple_type(visitor, location, elements, acc)
+    glance.VariableType(location:, name:) ->
+      visitor.variable_type(visitor, location, name, acc)
+  }
+}
+
+pub fn function_type(
+  visitor: Visitor(a),
+  _location: glance.Span,
+  parameters: List(glance.Type),
+  return: glance.Type,
+  acc: a,
+) -> a {
+  let acc =
+    list.fold(parameters, acc, fn(acc, type_) {
+      visitor.type_(visitor, type_, acc)
+    })
+
+  visitor.type_(visitor, return, acc)
+}
+
+pub fn hole_type(
+  _visitor: Visitor(a),
+  _location: glance.Span,
+  _name: String,
+  acc: a,
+) -> a {
+  acc
+}
+
+pub fn named_type(
+  visitor: Visitor(a),
+  _location: glance.Span,
+  _name: String,
+  _module: Option(String),
+  parameters: List(glance.Type),
+  acc: a,
+) -> a {
+  list.fold(parameters, acc, fn(acc, type_) {
+    visitor.type_(visitor, type_, acc)
+  })
+}
+
+pub fn tuple_type(
+  visitor: Visitor(a),
+  _location: glance.Span,
+  elements: List(glance.Type),
+  acc: a,
+) -> a {
+  list.fold(elements, acc, fn(acc, type_) { visitor.type_(visitor, type_, acc) })
+}
+
+pub fn variable_type(
+  _visitor: Visitor(a),
+  _location: glance.Span,
+  _name: String,
+  acc: a,
+) -> a {
+  acc
 }
