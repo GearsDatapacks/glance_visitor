@@ -1,6 +1,6 @@
 import glance
 import gleeunit
-import holiday/visit
+import holiday
 
 pub fn main() -> Nil {
   gleeunit.main()
@@ -35,9 +35,11 @@ pub fn main() {
   let assert Ok(module) = glance.module(src)
 
   let visitor =
-    visit.Visitor(..visit.default, variable: fn(_, _, _, count) { count + 1 })
+    holiday.Visitor(..holiday.default, variable: fn(_, _, _, count) {
+      count + 1
+    })
 
-  assert visit.module(visitor, module, 0) == 28
+  assert holiday.module(visitor, module, 0) == 28
 }
 
 pub fn visit_pattern_test() {
@@ -63,11 +65,11 @@ pub fn main() {
   let assert Ok(module) = glance.module(src)
 
   let visitor =
-    visit.Visitor(..visit.default, pattern_variable: fn(_, _, _, count) {
+    holiday.Visitor(..holiday.default, pattern_variable: fn(_, _, _, count) {
       count + 1
     })
 
-  assert visit.module(visitor, module, 0) == 15
+  assert holiday.module(visitor, module, 0) == 15
 }
 
 pub fn visit_type_test() {
@@ -92,9 +94,9 @@ type A {
   let assert Ok(module) = glance.module(src)
 
   let visitor =
-    visit.Visitor(..visit.default, variable_type: fn(_, _, _, count) {
+    holiday.Visitor(..holiday.default, variable_type: fn(_, _, _, count) {
       count + 1
     })
 
-  assert visit.module(visitor, module, 0) == 18
+  assert holiday.module(visitor, module, 0) == 18
 }
